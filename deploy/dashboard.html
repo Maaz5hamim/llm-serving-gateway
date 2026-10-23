@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Support Gateway Monitor</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+/* ─── Design tokens ────────────────────────────────────────────── */
+/* Layout: sticky header → 4 KPI tiles → 2 charts → cache chart → tenant + health row */
+:root {
+  --bg:        #0b0f17;
+  --surface:   #111827;
+  --surface-2: #192033;
+  --border:    rgba(255,255,255,0.07);
+  --fg:        #e2e8f0;
+  --fg-muted:  #64748b;
+  --fg-dim:    #1e293b;
+  --cyan:      #22d3ee;
+  --green:     #10b981;
+  --amber:     #f59e0b;
+  --red:       #ef4444;
+  --mono:      'IBM Plex Mono', 'Courier New', monospace;
+  --sans:      'Inter', system-ui, sans-serif;
+  --r:         8px;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg:        #f0f4f8;
+    --surface:   #ffffff;
+    --surface-2: #f8fafc;
+    --border:    rgba(0,0,0,0.08);
+    --fg:        #0f172a;
+    --fg-muted:  #64748b;
+    --fg-dim:    #e2e8f0;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg:        #f0f4f8;
+  --surface:   #ffffff;
+  --surface-2: #f8fafc;
+  --border:    rgba(0,0,0,0.08);
+  --fg:        #0f172a;
+  --fg-muted:  #64748b;
+  --fg-dim:    #e2e8f0;
+  color-scheme: light;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.5;
+  padding-left:  max(20px, env(safe-area-inset-left,  0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
+  padding-block: 0;
+  min-height: 100vh;
+}
+
+/* ─── Header ───────────────────────────────────────────────────── */
+.hdr {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 20;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-block: 11px;
+}
+.hdr-logo {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--cyan);
+}
+.hdr-sep { flex: 1; }
+.phase-pill {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--fg-muted);
+  color: var(--fg-muted);
+  transition: color .3s, border-color .3s;
+}
+.phase-pill.warming { color: var(--amber); border-color: var(--amber); }
+.phase-pill.hot     { color: var(--green); border-color: var(--green); }
+.phase-pill.budget  { color: var(--red);   border-color: var(--red);   }
+.live-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: blink 2s ease-in-out infinite;
+}
+.live-dot.off { background: var(--red); box-shadow: 0 0 6px var(--red); animation: none; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+.hdr-time {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-muted);
+  min-width: 80px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Main ─────────────────────────────────────────────────────── */
+.main { display: flex; flex-direction: column; gap: 14px; padding-block: 18px; }
+
+/* ─── KPI row ──────────────────────────────────────────────────── */
+.kpi-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+.kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 16px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.kpi-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.kpi-val {
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.kpi-val.c { color: var(--cyan);  }
+.kpi-val.g { color: var(--green); }
+.kpi-val.a { color: var(--amber); }
+.kpi-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Cards ────────────────────────────────────────────────────── */
+.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.card.full { grid-column: 1 / -1; }
+.card-hdr {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.card-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.card-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.chart-wrap { position: relative; height: 130px; }
+
+/* ─── Tenant + health row ──────────────────────────────────────── */
+.row-bottom { display: grid; grid-template-columns: 1fr 1fr 1fr 200px; gap: 12px; }
+
+.tenant {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tenant-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.tenant-name { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--fg); }
+.tier {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.tier-free { background: rgba(100,116,139,.18); color: var(--fg-muted); }
+.tier-paid { background: rgba(34,211,238,.12);  color: var(--cyan); }
+.tier-ent  { background: rgba(16,185,129,.12);  color: var(--green); }
+
+.budget-track {
+  height: 4px;
+  background: var(--fg-dim);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.budget-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--cyan);
+  transition: width .4s ease;
+}
+.budget-fill.w { background: var(--amber); }
+.budget-fill.c { background: var(--red); }
+.budget-meta {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.status-row { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; }
+.dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.dot.w { background: var(--amber); }
+.dot.c { background: var(--red); }
+
+/* ─── Health card ──────────────────────────────────────────────── */
+.health-rows { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.health-row  { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.health-name {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.badge {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.badge-ok   { background: rgba(16,185,129,.15); color: var(--green); }
+.badge-warn { background: rgba(245,158,11,.15); color: var(--amber); }
+.badge-crit { background: rgba(239,68,68,.15);  color: var(--red);   }
+.divider { height: 1px; background: var(--border); }
+.counter-row { display: flex; align-items: center; justify-content: space-between; }
+.counter-label { font-size: 10px; color: var(--fg-muted); }
+.counter-val { font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+[hidden] { display: none !important }
+
+/* ─── Setup overlay ────────────────────────────────────────────── */
+.overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.88);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+  padding: max(24px, env(safe-area-inset-left,0px));
+}
+.setup {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.setup-title { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--cyan); letter-spacing: .06em; text-transform: uppercase; }
+.setup-desc  { font-size: 13px; color: var(--fg-muted); line-height: 1.65; }
+.field       { display: flex; flex-direction: column; gap: 5px; }
+.field label { font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-muted); }
+.field input {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px 11px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+  outline: none;
+  transition: border-color .15s;
+  width: 100%;
+}
+.field input:focus { border-color: var(--cyan); }
+.btn {
+  background: var(--cyan);
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  padding: 11px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity .15s;
+  width: 100%;
+}
+.btn:hover { opacity: .85; }
+
+/* ─── Responsive ───────────────────────────────────────────────── */
+@media (max-width: 760px) {
+  .kpi-row    { grid-template-columns: 1fr 1fr; }
+  .row-2      { grid-template-columns: 1fr; }
+  .row-bottom { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- Setup overlay -->
+<div class="overlay" id="overlay">
+  <div class="setup">
+    <div class="setup-title">Gateway Monitor Setup</div>
+    <p class="setup-desc">Enter your admin key to unlock per-tenant budget tracking. The key is stored in your browser only and used exclusively to query this gateway's own usage API.</p>
+    <div class="field">
+      <label>Admin API Key</label>
+      <input type="password" id="inp-admin" placeholder="your ADMIN_API_KEY" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Gateway URL</label>
+      <input type="text" id="inp-gw" value="/gateway" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Prometheus URL</label>
+      <input type="text" id="inp-prom" value="/prometheus" autocomplete="off">
+    </div>
+    <button class="btn" onclick="saveSetup()">Open Dashboard</button>
+  </div>
+</div>
+
+<!-- Header -->
+<header class="hdr">
+  <span class="hdr-logo">Support Gateway</span>
+  <span class="phase-pill" id="phase">COLD START</span>
+  <span class="hdr-sep"></span>
+  <span class="live-dot off" id="live-dot"></span>
+  <span class="hdr-time" id="hdr-time">—</span>
+</header>
+
+<main class="main">
+
+  <!-- KPI tiles -->
+  <div class="kpi-row">
+    <div class="kpi">
+      <div class="kpi-label">Requests / sec</div>
+      <div class="kpi-val c" id="kpi-rps">—</div>
+      <div class="kpi-sub" id="kpi-rps-sub">—</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Cache Hit Rate</div>
+      <div class="kpi-val g" id="kpi-hit">—</div>
+      <div class="kpi-sub" id="kpi-hit-sub">—</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Cost (session)</div>
+      <div class="kpi-val a" id="kpi-cost">—</div>
+      <div class="kpi-sub" id="kpi-cost-sub">real provider spend</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Saved (session)</div>
+      <div class="kpi-val g" id="kpi-saved">—</div>
+      <div class="kpi-sub" id="kpi-saved-sub">avoided by cache</div>
+    </div>
+  </div>
+
+  <!-- Charts row 1: req/s + latency -->
+  <div class="row-2">
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-title">Requests / second</span>
+        <span class="card-meta" id="meta-rps">last 5 min</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-rps"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-title">p99 Latency</span>
+        <span class="card-meta" id="meta-lat">ms</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-lat"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Chart row 2: cache hit rate (full width) -->
+  <div class="row-2">
+    <div class="card full">
+      <div class="card-hdr">
+        <span class="card-title">Cache Hit Rate</span>
+        <span class="card-meta">%  ·  warms on repeated questions</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-hit"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Bottom row: tenant cards + health -->
+  <div class="row-bottom">
+
+    <div class="tenant" id="t-shopease">
+      <div class="tenant-top">
+        <span class="tenant-name">ShopEasy</span>
+        <span class="tier tier-free">Free</span>
+      </div>
+      <div>
+        <div class="budget-track"><div class="budget-fill" id="bf-shopease" style="width:0%"></div></div>
+        <div class="budget-meta">
+          <span id="bm-shopease-used">$0.0000</span>
+          <span>/ $0.50 daily</span>
+        </div>
+      </div>
+      <div class="status-row">
+        <span class="dot" id="dot-shopease"></span>
+        <span id="status-shopease">Serving</span>
+      </div>
+    </div>
+
+    <div class="tenant" id="t-megamart">
+      <div class="tenant-top">
+        <span class="tenant-name">MegaMart</span>
+        <span class="tier tier-paid">Paid</span>
+      </div>
+      <div>
+        <div class="budget-track"><div class="budget-fill" id="bf-megamart" style="width:0%"></div></div>
+        <div class="budget-meta">
+          <span id="bm-megamart-used">$0.0000</span>
+          <span>/ $5.00 daily</span>
+        </div>
+      </div>
+      <div class="status-row">
+        <span class="dot" id="dot-megamart"></span>
+        <span id="status-megamart">Serving</span>
+      </div>
+    </div>
+
+    <div class="tenant" id="t-luxebrand">
+      <div class="tenant-top">
+        <span class="tenant-name">LuxeBrand</span>
+        <span class="tier tier-ent">Enterprise</span>
+      </div>
+      <div>
+        <div class="budget-track"><div class="budget-fill" id="bf-luxebrand" style="width:0%"></div></div>
+        <div class="budget-meta">
+          <span id="bm-luxebrand-used">$0.0000</span>
+          <span>/ $20.00 daily</span>
+        </div>
+      </div>
+      <div class="status-row">
+        <span class="dot" id="dot-luxebrand"></span>
+        <span id="status-luxebrand">Serving</span>
+      </div>
+    </div>
+
+    <div class="card" style="justify-content:flex-start">
+      <div class="card-hdr"><span class="card-title">System Health</span></div>
+      <div class="health-rows" id="breaker-list">
+        <div class="health-row">
+          <span class="health-name">openai</span>
+          <span class="badge badge-ok">CLOSED</span>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div class="counter-row">
+        <span class="counter-label">Rate limited</span>
+        <span class="counter-val" id="cnt-rl">0</span>
+      </div>
+      <div class="counter-row">
+        <span class="counter-label">Budget blocked</span>
+        <span class="counter-val" id="cnt-bud">0</span>
+      </div>
+      <div class="counter-row">
+        <span class="counter-label">Coalesced</span>
+        <span class="counter-val" id="cnt-coal">0</span>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────
+let PROM = '/prometheus';
+let GW   = '/gateway';
+let ADMIN_KEY = '';
+
+const TENANT_BUDGETS = {
+  'shopease-support':  { el: 'shopease',  limit: 0.50  },
+  'megamart-support':  { el: 'megamart',  limit: 5.00  },
+  'luxebrand-support': { el: 'luxebrand', limit: 20.00 },
+};
+
+// ── Setup ─────────────────────────────────────────────────────────
+function saveSetup() {
+  ADMIN_KEY = document.getElementById('inp-admin').value.trim();
+  PROM      = document.getElementById('inp-prom').value.trim().replace(/\/$/, '');
+  GW        = document.getElementById('inp-gw').value.trim().replace(/\/$/, '');
+  try {
+    localStorage.setItem('gw_admin', ADMIN_KEY);
+    localStorage.setItem('gw_prom',  PROM);
+    localStorage.setItem('gw_url',   GW);
+  } catch {}
+  document.getElementById('overlay').hidden = true;
+  startPolling();
+}
+
+(function loadSaved() {
+  try {
+    const k = localStorage.getItem('gw_admin');
+    const p = localStorage.getItem('gw_prom');
+    const g = localStorage.getItem('gw_url');
+    if (k) { ADMIN_KEY = k; document.getElementById('inp-admin').value = k; }
+    if (p) { PROM = p;      document.getElementById('inp-prom').value  = p; }
+    if (g) { GW   = g;      document.getElementById('inp-gw').value    = g; }
+    if (k) { document.getElementById('overlay').hidden = true; startPolling(); }
+  } catch {}
+})();
+
+// ── Helpers ───────────────────────────────────────────────────────
+const el  = id => document.getElementById(id);
+const fmt = v  => isNaN(v) || !isFinite(v) ? '—' : v;
+
+async function promInstant(expr) {
+  try {
+    const r = await fetch(`${PROM}/api/v1/query?query=${encodeURIComponent(expr)}`);
+    const d = await r.json();
+    if (d.status !== 'success') return [];
+    return d.data.result;
+  } catch { return []; }
+}
+
+async function scalar(expr, fallback = 0) {
+  const res = await promInstant(expr);
+  if (!res.length) return fallback;
+  const v = parseFloat(res[0].value[1]);
+  return isNaN(v) || !isFinite(v) ? fallback : v;
+}
+
+// ── Rolling buffers (5 min @ 5s) ─────────────────────────────────
+const MAX = 60;
+const tLabels = [], dRps = [], dLat = [], dHit = [];
+
+function push(arr, v) { if (arr.length >= MAX) arr.shift(); arr.push(v); }
+
+// ── Chart factory ─────────────────────────────────────────────────
+const isDark = () => !document.documentElement.dataset.theme
+  ? window.matchMedia('(prefers-color-scheme: dark)').matches
+  : document.documentElement.dataset.theme === 'dark';
+
+function mkChart(id, color, unit, yMax) {
+  const cfg = {
+    type: 'line',
+    data: { labels: tLabels, datasets: [{
+      data: [],
+      borderColor: color,
+      backgroundColor: color.replace(')', ', 0.08)').replace('rgb', 'rgba'),
+      borderWidth: 1.5,
+      pointRadius: 0,
+      fill: true,
+      tension: 0.35,
+    }]},
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          backgroundColor: '#1e293b',
+          titleColor: '#64748b',
+          bodyColor: '#e2e8f0',
+          borderColor: 'rgba(255,255,255,.07)',
+          borderWidth: 1,
+          titleFont: { family: "'IBM Plex Mono'" },
+          bodyFont:  { family: "'IBM Plex Mono'", size: 12 },
+          callbacks: { label: ctx => ` ${ctx.parsed.y.toFixed(2)} ${unit}` },
+        },
+      },
+      scales: {
+        x: {
+          grid:  { color: 'rgba(255,255,255,.04)' },
+          ticks: { color: '#64748b', font: { family: "'IBM Plex Mono'", size: 9 }, maxTicksLimit: 6, maxRotation: 0 },
+        },
+        y: {
+          grid:       { color: 'rgba(255,255,255,.04)' },
+          ticks:      { color: '#64748b', font: { family: "'IBM Plex Mono'", size: 9 }, maxTicksLimit: 5 },
+          beginAtZero: true,
+          ...(yMax != null ? { max: yMax } : {}),
+        },
+      },
+    },
+  };
+  return new Chart(el(id), cfg);
+}
+
+const cRps = mkChart('chart-rps', 'rgb(34,211,238)',  'req/s');
+const cLat = mkChart('chart-lat', 'rgb(245,158,11)',  'ms');
+const cHit = mkChart('chart-hit', 'rgb(16,185,129)',  '%', 100);
+
+// ── Tenant budget from admin usage API ────────────────────────────
+const tenantUsage = {};
+
+async function fetchUsage() {
+  if (!ADMIN_KEY) return;
+  const from = new Date(Date.now() - 86400000).toISOString();
+  const to   = new Date().toISOString();
+  try {
+    const r = await fetch(`${GW}/admin/usage?from=${from}&to=${to}&group_by=key`, {
+      headers: { Authorization: `Bearer ${ADMIN_KEY}` }
+    });
+    if (!r.ok) return;
+    const rows = await r.json();
+    if (Array.isArray(rows)) {
+      for (const row of rows) {
+        if (row.key_name && row.cost_usd != null) {
+          tenantUsage[row.key_name] = parseFloat(row.cost_usd) || 0;
+        }
+      }
+    }
+    renderTenantBudgets();
+  } catch {}
+}
+
+function renderTenantBudgets() {
+  for (const [name, cfg] of Object.entries(TENANT_BUDGETS)) {
+    const used  = tenantUsage[name] || 0;
+    const pct   = Math.min(100, (used / cfg.limit) * 100);
+    const fillEl = el('bf-' + cfg.el);
+    const usedEl = el('bm-' + cfg.el + '-used');
+    if (fillEl) {
+      fillEl.style.width = pct + '%';
+      fillEl.className   = 'budget-fill' + (pct > 90 ? ' c' : pct > 70 ? ' w' : '');
+    }
+    if (usedEl) usedEl.textContent = '$' + used.toFixed(4);
+  }
+}
+
+// ── Phase detector ────────────────────────────────────────────────
+function detectPhase(hitPct, budgetBlocked) {
+  const avgHit = dHit.slice(-8).reduce((a,b)=>a+b,0) / Math.max(1, Math.min(dHit.length,8));
+  if (budgetBlocked > 0 && avgHit > 40) return ['BUDGET PRESSURE', 'budget'];
+  if (avgHit > 65)  return ['CACHE HOT',  'hot'];
+  if (avgHit > 10)  return ['WARMING',    'warming'];
+  return ['COLD START', ''];
+}
+
+// ── Tenant status ─────────────────────────────────────────────────
+function setTenantStatus(id, state, text) {
+  const d = el('dot-' + id);
+  const s = el('status-' + id);
+  if (!d || !s) return;
+  d.className = 'dot' + (state === 'warn' ? ' w' : state === 'crit' ? ' c' : '');
+  s.textContent = text;
+}
+
+// ── Main refresh ──────────────────────────────────────────────────
+let online = false;
+
+async function refresh() {
+  const now   = new Date();
+  const label = now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+
+  try {
+    const [rps, hit, lat, cost, saved, rl, bud, coal, breakers] = await Promise.all([
+      scalar('sum(rate(gateway_requests_total[1m]))'),
+      scalar('sum(rate(gateway_requests_total{cache_status="hit"}[2m])) / sum(rate(gateway_requests_total[2m]))'),
+      scalar('histogram_quantile(0.99, sum(rate(gateway_request_duration_seconds_bucket[2m])) by (le)) * 1000'),
+      scalar('max(gateway_cost_usd_total)'),
+      scalar('max(gateway_saved_usd_total)'),
+      scalar('sum(gateway_ratelimited_total)'),
+      scalar('sum(gateway_budget_rejected_total)'),
+      scalar('max(gateway_coalesced_total)'),
+      promInstant('gateway_breaker_state'),
+    ]);
+
+    online = true;
+    el('live-dot').className = 'live-dot';
+    el('hdr-time').textContent = 'updated ' + label;
+
+    // Buffers
+    push(tLabels, label);
+    push(dRps,    rps);
+    push(dLat,    lat);
+    push(dHit,    hit * 100);
+
+    // KPI tiles
+    el('kpi-rps').textContent   = rps.toFixed(1);
+    el('kpi-hit').textContent   = (hit * 100).toFixed(0) + '%';
+    el('kpi-cost').textContent  = '$' + cost.toFixed(4);
+    el('kpi-saved').textContent = '$' + saved.toFixed(4);
+    el('kpi-rps-sub').textContent  = `${(rps * 60).toFixed(0)} req/min`;
+    el('kpi-hit-sub').textContent  = hit > 0 ? `${(hit*100).toFixed(1)}% of requests` : 'no data yet';
+    el('kpi-cost-sub').textContent = cost > 0 && saved > 0
+      ? `${((saved/(cost+saved))*100).toFixed(0)}% total avoided`
+      : 'awaiting requests';
+
+    // Chart data
+    cRps.data.datasets[0].data = [...dRps];
+    cLat.data.datasets[0].data = [...dLat];
+    cHit.data.datasets[0].data = [...dHit];
+    el('meta-lat').textContent = lat > 0 ? `p99 ${lat.toFixed(0)} ms` : 'ms';
+    cRps.update('none'); cLat.update('none'); cHit.update('none');
+
+    // Phase
+    const [pText, pClass] = detectPhase(hit * 100, bud);
+    const pill = el('phase');
+    pill.textContent = pText;
+    pill.className   = 'phase-pill' + (pClass ? ' ' + pClass : '');
+
+    // Counters
+    el('cnt-rl').textContent   = Math.round(rl);
+    el('cnt-bud').textContent  = Math.round(bud);
+    el('cnt-coal').textContent = Math.round(coal);
+
+    // Circuit breakers
+    if (breakers.length) {
+      el('breaker-list').innerHTML = breakers.map(b => {
+        const v   = parseFloat(b.value[1]);
+        const lbl = v === 0 ? 'CLOSED' : v === 1 ? 'OPEN' : 'PROBE';
+        const cls = v === 0 ? 'badge-ok' : v === 1 ? 'badge-crit' : 'badge-warn';
+        return `<div class="health-row">
+          <span class="health-name">${b.metric.provider || 'provider'}</span>
+          <span class="badge ${cls}">${lbl}</span>
+        </div>`;
+      }).join('');
+    }
+
+    // Tenant status (heuristic without per-key metrics)
+    const budBlocked = bud > 0;
+    const rlBlocked  = rl  > 0;
+    setTenantStatus('shopease',  budBlocked ? 'crit' : rlBlocked ? 'warn' : '', budBlocked ? 'Budget hit' : rlBlocked ? 'Rate limited' : 'Serving');
+    setTenantStatus('megamart',  '',  'Serving');
+    setTenantStatus('luxebrand', '',  'Serving');
+
+  } catch {
+    if (online) {
+      online = false;
+      el('live-dot').className = 'live-dot off';
+    }
+  }
+}
+
+// ── Start ─────────────────────────────────────────────────────────
+function startPolling() {
+  refresh();
+  setInterval(refresh, 5000);
+  fetchUsage();
+  setInterval(fetchUsage, 15000);
+}
+</script>
+</body>
+</html>

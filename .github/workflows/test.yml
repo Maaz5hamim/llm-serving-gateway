@@ -1,0 +1,25 @@
+name: test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: {POSTGRES_USER: gateway, POSTGRES_PASSWORD: gateway, POSTGRES_DB: gateway}
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U gateway" --health-interval 5s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ['6379:6379']
+    env:
+      TEST_DATABASE_URL: postgres://gateway:gateway@localhost:5432/gateway?sslmode=disable
+      TEST_REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.x'}
+      - run: psql "$TEST_DATABASE_URL" -f db/migrations/001_init.sql
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: go build ./cmd/...

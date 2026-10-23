@@ -1,0 +1,36 @@
+# Model routing configuration.
+# API keys stay in .env — reference them here via key_env.
+
+timeout_ms: 30000   # per-attempt timeout before trying the next provider
+
+models:
+  # "support" is the model name clients send in their requests.
+  # Add more providers under the same alias for automatic failover.
+  # The gateway tries them top-to-bottom on errors, timeouts, or rate limits.
+  support:
+    - provider: openai
+      kind: openai
+      url: https://api.openai.com/v1
+      key_env: OPENAI_API_KEY
+      model: gpt-4o-mini
+      input_per_mtok: 0.150    # USD per million input tokens
+      output_per_mtok: 0.600
+
+    # Fallback — uncomment to enable
+    # - provider: anthropic
+    #   kind: anthropic
+    #   url: https://api.anthropic.com/v1
+    #   key_env: ANTHROPIC_API_KEY
+    #   model: claude-haiku-4-5
+    #   input_per_mtok: 0.800
+    #   output_per_mtok: 4.000
+
+  # Add more aliases for different use cases, each with its own provider chain.
+  # premium:
+  #   - provider: openai
+  #     kind: openai
+  #     url: https://api.openai.com/v1
+  #     key_env: OPENAI_API_KEY
+  #     model: gpt-4o
+  #     input_per_mtok: 2.500
+  #     output_per_mtok: 10.000
