@@ -19,7 +19,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.23.x'}
-      - run: psql "$TEST_DATABASE_URL" -f db/migrations/001_init.sql
+      - name: Apply all database migrations
+        run: |
+          for migration in db/migrations/*.sql; do
+            psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+          done
       - run: go test -race ./...
       - run: go vet ./...
       - run: go build ./cmd/...
